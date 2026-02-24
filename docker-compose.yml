@@ -1,0 +1,9 @@
+services:
+  gravity-claw:
+    build: .
+    container_name: gravity-claw
+    restart: unless-stopped
+    env_file:
+      - .env
+    # No ports exposed — long-polling only
+    # No volumes needed for Level 1 (Level 2 will add SQLite volume)
