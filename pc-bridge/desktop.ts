@@ -44,9 +44,9 @@ async function runHelper(
   return stdout.trim();
 }
 
-/** Take full desktop screenshot — returns base64 JPEG */
+/** Take full desktop screenshot (ALL monitors) — returns base64 JPEG */
 export async function desktopScreenshot(): Promise<string> {
-  return await runHelper(["screenshot"], { timeout: 15000 });
+  return await runHelper(["screenshot", "all"], { timeout: 15000 });
 }
 
 /** Click at screen coordinates */
@@ -85,6 +85,10 @@ export async function desktopHotkey(hotkey: string): Promise<string> {
     u: "0x55", v: "0x56", w: "0x57", x: "0x58", y: "0x59", z: "0x5A",
     "0": "0x30", "1": "0x31", "2": "0x32", "3": "0x33", "4": "0x34",
     "5": "0x35", "6": "0x36", "7": "0x37", "8": "0x38", "9": "0x39",
+    prtscn: "0x2C", printscreen: "0x2C", snapshot: "0x2C",
+    insert: "0x2D", ins: "0x2D",
+    numlock: "0x90", scrolllock: "0x91",
+    pause: "0x13", break: "0x13",
   };
 
   const parts = hotkey.toLowerCase().split("+").map(p => p.trim());
