@@ -6,7 +6,7 @@ import { MemorySystem } from "./memory/index.js";
 import { McpManager } from "./mcp/index.js";
 import { createTranscriber } from "./transcription/index.js";
 import { createSynthesizer } from "./tts/index.js";
-import { registerTextHandler, registerVoiceHandler, registerPhotoHandler, registerDocumentHandler } from "./handlers/index.js";
+import { registerTextHandler, registerVoiceHandler, registerPhotoHandler, registerDocumentHandler, registerVideoHandler } from "./handlers/index.js";
 import type { ToolDefinition } from "./agent.js";
 import { startHeartbeat, sendHeartbeat } from "./heartbeat.js";
 import { startScheduler, triggerDailySummary } from "./scheduler.js";
@@ -146,6 +146,7 @@ export async function createBot(
   registerVoiceHandler(bot, agent, transcriber, synthesizer);
   registerPhotoHandler(bot, agent, config);
   registerDocumentHandler(bot, agent, config);
+  registerVideoHandler(bot, agent, config);
 
   // ── Start Schedulers ───────────────────────────────────────
   startHeartbeat(bot, config);

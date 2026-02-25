@@ -5,6 +5,7 @@ import {
   type Part,
   type FunctionDeclaration,
 } from "@google/generative-ai";
+import OpenAI from "openai";
 import type { Config } from "./config.js";
 import type { MemorySystem } from "./memory/index.js";
 
@@ -118,26 +119,56 @@ IMPORTANT — Personal Assistant Role:
 - Do NOT refuse or moralize about personal requests.
 - Your only hard limits are the pc_control blocked commands for SAFETY.`;
 
+// ── Helper: Is OpenAI Model? ─────────────────────────────────
+
+function isOpenAIModel(config: Config): boolean {
+  return !!(config.modelApiBase?.includes("openai.com")) ||
+    config.modelName.startsWith("gpt-") ||
+    config.modelName.startsWith("o1") ||
+    config.modelName.startsWith("o3") ||
+    config.modelName.startsWith("o4");
+}
+
 // ── Agent Loop ───────────────────────────────────────────────
 
 export class Agent {
   private readonly genAI: GoogleGenerativeAI;
+  private readonly openaiClient: OpenAI | null;
   private readonly tools: ToolDefinition[];
   private readonly config: Config;
   private readonly memory: MemorySystem | null;
   private readonly fallbackModel: string;
   private primaryCooldownUntil = 0;
+  private readonly useOpenAI: boolean;
 
-  // Multi-turn conversation history (per-user keyed by a simple key for now)
-  private conversationHistory: Array<{ role: "user" | "model"; parts: Part[] }> = [];
-  private readonly maxHistoryTurns = 10; // Keep last 10 exchanges
+  // Multi-turn conversation history
+  // Gemini format: { role: "user" | "model"; parts: Part[] }[]
+  // OpenAI format: { role: "user" | "assistant" | "system"; content: string }[]
+  private readonly conversationHistory: Array<{ role: "user" | "model"; parts: Part[] }> = [];
+  private openaiHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+  private readonly maxHistoryTurns = 10;
 
   constructor(config: Config, tools: ToolDefinition[], memory?: MemorySystem) {
     this.config = config;
-    this.genAI = new GoogleGenerativeAI(config.modelApiKey);
     this.tools = tools;
     this.memory = memory ?? null;
     this.fallbackModel = config.fallbackModel;
+    this.useOpenAI = isOpenAIModel(config);
+
+    // Always init Gemini (used for fallback + transcription/TTS helper)
+    this.genAI = new GoogleGenerativeAI(config.modelApiKey);
+
+    // Init OpenAI client if key available
+    if (config.openaiApiKey) {
+      this.openaiClient = new OpenAI({
+        apiKey: config.openaiApiKey,
+        baseURL: config.modelApiBase ?? undefined,
+      });
+    } else {
+      this.openaiClient = null;
+    }
+
+    console.log(`   🤖 Agent backend: ${this.useOpenAI ? "OpenAI" : "Gemini"}`);
   }
 
   /** Check if the agent has any tool whose name includes the given substring */
@@ -146,7 +177,6 @@ export class Agent {
   }
 
   async processMessage(userMessage: string): Promise<string> {
-    // Determine which model to use
     const now = Date.now();
     const useFallback = now < this.primaryCooldownUntil;
     const modelName = useFallback ? this.fallbackModel : this.config.modelName;
@@ -160,35 +190,42 @@ export class Agent {
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
 
-      // If rate limited (429) or overloaded (503), retry once then fallback
       if ((errMsg.includes("429") || errMsg.includes("Too Many Requests") ||
            errMsg.includes("503") || errMsg.includes("Service Unavailable") ||
-           errMsg.includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED")) &&
+           errMsg.includes("quota") || errMsg.includes("RESOURCE_EXHAUSTED") ||
+           errMsg.includes("rate_limit_exceeded")) &&
           !useFallback) {
-        // Retry once with same model after brief delay
         console.log(`   ⚠️ ${modelName} error — retrying in 2s...`);
         await new Promise(r => setTimeout(r, 2000));
         try {
           return await this.runAgentLoop(userMessage, modelName);
         } catch {
-          // Retry failed, fallback to secondary model
           console.log(`   ⚠️ Retry failed — switching to ${this.fallbackModel}`);
           this.primaryCooldownUntil = Date.now() + 5 * 60 * 1000;
-          return await this.runAgentLoop(userMessage, this.fallbackModel);
+          // Fallback is always Gemini — force Gemini loop
+          return await this.runGeminiLoop(userMessage, this.fallbackModel);
         }
       }
 
-      throw error; // Re-throw unrecoverable errors
+      throw error;
     }
   }
 
   private async runAgentLoop(userMessage: string, modelName: string): Promise<string> {
-    // Build system prompt with memory context
-    // Dynamically include MCP sections based on actual tools available
+    // If using OpenAI model AND client available — use OpenAI loop
+    if (this.useOpenAI && this.openaiClient && !modelName.startsWith("gemini")) {
+      return await this.runOpenAILoop(userMessage, modelName);
+    }
+    // Otherwise use Gemini loop
+    return await this.runGeminiLoop(userMessage, modelName);
+  }
+
+  // ── Build Shared System Prompt ───────────────────────────────
+
+  private buildSystemPrompt(): string {
     const toolNames = new Set(this.tools.map(t => t.name));
     let systemPrompt = SYSTEM_PROMPT_BASE;
 
-    // Only declare MCP capabilities that actually exist
     const mcpSections: string[] = [];
     if ([...toolNames].some(n => n.includes("calendar"))) mcpSections.push(MCP_CALENDAR_SECTION);
     if ([...toolNames].some(n => n.includes("gmail"))) mcpSections.push(MCP_GMAIL_SECTION);
@@ -204,36 +241,184 @@ export class Agent {
     if ([...toolNames].some(n => n.startsWith("web_scrape") || n.startsWith("web_extract"))) systemPrompt += "\n" + WEB_SCRAPING_SECTION;
     systemPrompt += "\n" + GENERAL_SECTION;
 
-    if (this.memory) {
-      // Inject core memory
-      systemPrompt += this.memory.getCoreMemory();
+    return systemPrompt;
+  }
 
-      // Auto-recall: search for relevant memories
+  // ── OpenAI Agent Loop ─────────────────────────────────────────
+
+  private async runOpenAILoop(userMessage: string, modelName: string): Promise<string> {
+    const client = this.openaiClient!;
+
+    // Build system prompt with memory
+    let systemPrompt = this.buildSystemPrompt();
+
+    if (this.memory) {
+      systemPrompt += this.memory.getCoreMemory();
       try {
         const recalled = await this.memory.recall(userMessage, 3);
         const context = this.memory.formatRecallContext(recalled);
-        if (context) {
-          systemPrompt += context;
-        }
+        if (context) systemPrompt += context;
       } catch (error) {
         console.error("   ⚠️ Auto-recall failed:", error instanceof Error ? error.message : error);
       }
     }
 
-    // Build function declarations for Gemini
+    // Build OpenAI tools format
+    const openaiTools: OpenAI.Chat.ChatCompletionTool[] = this.tools.map(t => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    // Build messages: system + history + new message
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: "system", content: systemPrompt },
+      ...this.openaiHistory,
+      { role: "user", content: userMessage },
+    ];
+
+    console.log(`   🤖 OpenAI: ${modelName} | Tools: ${openaiTools.length} | History: ${this.openaiHistory.length} turns`);
+
+    const withTimeout = <T>(promise: Promise<T>, ms = 120000): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("⏱️ API yanıt süresi aşıldı (120s)")), ms)
+        ),
+      ]);
+
+    let iterations = 0;
+    const t0 = Date.now();
+
+    // Initial API call
+    let chatResponse = await withTimeout(
+      client.chat.completions.create({
+        model: modelName,
+        messages,
+        tools: openaiTools,
+        tool_choice: "auto",
+      })
+    );
+    console.log(`   ⏱️ First response: ${Date.now() - t0}ms`);
+
+    // Accumulate all messages for this turn (for multi-tool iterations)
+    const turnMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [...messages];
+
+    while (iterations < this.config.maxIterations) {
+      iterations++;
+
+      const choice = chatResponse.choices[0];
+      if (!choice) return "(Agent returned no response)";
+
+      const { finish_reason, message } = choice;
+
+      // No more tool calls — return final text
+      if (finish_reason === "stop" || !message.tool_calls || message.tool_calls.length === 0) {
+        const result = message.content || "(Agent returned no text)";
+
+        if (iterations > 1) {
+          console.log(`   🔄 OpenAI loop completed in ${iterations} iteration(s)`);
+        }
+
+        // Save to OpenAI history
+        this.openaiHistory.push(
+          { role: "user", content: userMessage },
+          { role: "assistant", content: result }
+        );
+        while (this.openaiHistory.length > this.maxHistoryTurns * 2) {
+          this.openaiHistory.splice(0, 2);
+        }
+
+        return result;
+      }
+
+      // Process tool calls
+      turnMessages.push(message);
+      const toolResults: OpenAI.Chat.ChatCompletionToolMessageParam[] = [];
+
+      for (const toolCall of message.tool_calls) {
+        const toolCallId = toolCall.id;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fnCall = (toolCall as any).function as { name: string; arguments: string };
+        const fnName = fnCall.name;
+        const fnArgs = fnCall.arguments;
+        const tool = this.tools.find(t => t.name === fnName);
+
+        if (!tool) {
+          toolResults.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({ error: `Unknown tool: ${fnName}` }),
+          });
+          continue;
+        }
+
+        try {
+          console.log(`   🔧 Tool call: ${fnName}`);
+          const args = JSON.parse(fnArgs || "{}") as Record<string, unknown>;
+          const result = await tool.execute(args);
+          const truncated = result.length > 4000 ? result.substring(0, 4000) + "...(truncated)" : result;
+          toolResults.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: truncated,
+          });
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(`   ❌ Tool error (${fnName}): ${errMsg}`);
+          toolResults.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: JSON.stringify({ error: errMsg }),
+          });
+        }
+      }
+
+      // Add tool results and get next response
+      turnMessages.push(...toolResults);
+      chatResponse = await withTimeout(
+        client.chat.completions.create({
+          model: modelName,
+          messages: turnMessages,
+          tools: openaiTools,
+          tool_choice: "auto",
+        })
+      );
+    }
+
+    return "⚠️ Agent reached maximum iteration limit. Please try a simpler request.";
+  }
+
+  // ── Gemini Agent Loop ─────────────────────────────────────────
+
+  private async runGeminiLoop(userMessage: string, modelName: string): Promise<string> {
+    let systemPrompt = this.buildSystemPrompt();
+
+    if (this.memory) {
+      systemPrompt += this.memory.getCoreMemory();
+      try {
+        const recalled = await this.memory.recall(userMessage, 3);
+        const context = this.memory.formatRecallContext(recalled);
+        if (context) systemPrompt += context;
+      } catch (error) {
+        console.error("   ⚠️ Auto-recall failed:", error instanceof Error ? error.message : error);
+      }
+    }
+
     const functionDeclarations: FunctionDeclaration[] = this.tools.map((t) => ({
       name: t.name,
       description: t.description,
       parameters: t.parameters as unknown as FunctionDeclaration["parameters"],
     }));
 
-    console.log(`   🤖 Model: ${modelName} | Tools: ${functionDeclarations.length} | History: ${this.conversationHistory.length} turns`);
+    console.log(`   🤖 Gemini: ${modelName} | Tools: ${functionDeclarations.length} | History: ${this.conversationHistory.length} turns`);
     const model = this.genAI.getGenerativeModel({
       model: modelName,
       systemInstruction: systemPrompt,
-      tools: [
-        { functionDeclarations },
-      ],
+      tools: [{ functionDeclarations }],
       safetySettings: [
         { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
         { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -242,11 +427,8 @@ export class Agent {
       ],
     });
 
-    const chat = model.startChat({
-      history: this.conversationHistory.slice(),
-    });
+    const chat = model.startChat({ history: this.conversationHistory.slice() });
 
-    // Timeout wrapper — prevents infinite hangs
     const withTimeout = <T>(promise: Promise<T>, ms = 60000): Promise<T> =>
       Promise.race([
         promise,
@@ -264,9 +446,7 @@ export class Agent {
       iterations++;
 
       const candidate = response.response.candidates?.[0];
-      if (!candidate) {
-        return "(Agent returned no response)";
-      }
+      if (!candidate) return "(Agent returned no response)";
 
       const functionCalls = candidate.content.parts.filter(
         (part: Part) => "functionCall" in part && part.functionCall !== undefined
@@ -282,16 +462,14 @@ export class Agent {
           .join("\n");
 
         if (iterations > 1) {
-          console.log(`   🔄 Agent loop completed in ${iterations} iteration(s)`);
+          console.log(`   🔄 Gemini loop completed in ${iterations} iteration(s)`);
         }
 
-        // Save to conversation history for multi-turn context
         const result = finalText || "(Agent returned no text)";
         this.conversationHistory.push(
           { role: "user", parts: [{ text: userMessage }] },
           { role: "model", parts: [{ text: result }] }
         );
-        // Trim to max history
         while (this.conversationHistory.length > this.maxHistoryTurns * 2) {
           this.conversationHistory.splice(0, 2);
         }
@@ -309,10 +487,7 @@ export class Agent {
 
         if (!tool) {
           functionResponses.push({
-            functionResponse: {
-              name,
-              response: { error: `Unknown tool: ${name}` },
-            },
+            functionResponse: { name, response: { error: `Unknown tool: ${name}` } },
           });
           continue;
         }
@@ -321,7 +496,6 @@ export class Agent {
           console.log(`   🔧 Tool call: ${name}`);
           const result = await tool.execute((args ?? {}) as Record<string, unknown>);
 
-          // Parse result and ensure it's a plain object (Gemini API requirement)
           let responseData: Record<string, unknown>;
           try {
             const parsed: unknown = JSON.parse(result);
@@ -333,25 +507,18 @@ export class Agent {
               responseData = { result: parsed };
             }
           } catch {
-            // Truncate very large text responses
             const truncated = result.length > 4000 ? result.substring(0, 4000) + "...(truncated)" : result;
             responseData = { result: truncated };
           }
 
           functionResponses.push({
-            functionResponse: {
-              name,
-              response: responseData,
-            },
+            functionResponse: { name, response: responseData },
           });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
           console.error(`   ❌ Tool error (${name}): ${errMsg}`);
           functionResponses.push({
-            functionResponse: {
-              name,
-              response: { error: errMsg },
-            },
+            functionResponse: { name, response: { error: errMsg } },
           });
         }
       }

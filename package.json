@@ -16,6 +16,7 @@
     "@modelcontextprotocol/sdk": "^1.27.0",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^16.4.7",
+    "googleapis": "^171.4.0",
     "grammy": "^1.35.0",
     "node-cron": "^4.2.1",
     "openai": "^6.25.0",

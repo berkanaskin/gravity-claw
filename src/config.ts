@@ -29,6 +29,8 @@ export interface Config {
   orchestratorEnabled: boolean;
   orchestratorModel: string;
   openaiApiKey: string | null;
+  // OpenAI API base URL (set to https://api.openai.com/v1 when using GPT models)
+  modelApiBase: string | null;
   // Heartbeat
   heartbeatEnabled: boolean;
   heartbeatCron: string;
@@ -85,6 +87,7 @@ export function loadConfig(): Config {
     orchestratorEnabled: process.env["ORCHESTRATOR_ENABLED"] === "true",
     orchestratorModel: process.env["ORCHESTRATOR_MODEL"] || "gpt-5.2",
     openaiApiKey: process.env["OPENAI_API_KEY"] || null,
+    modelApiBase: process.env["MODEL_API_BASE"] || null,
     // Heartbeat
     heartbeatEnabled: process.env["HEARTBEAT_ENABLED"] !== "false",
     heartbeatCron: process.env["HEARTBEAT_CRON"] || "0 8 * * *",
@@ -97,7 +100,8 @@ export function loadConfig(): Config {
 
   // NEVER log secrets — only confirm features
   console.log("✅ Config loaded:");
-  console.log(`   Model: ${config.modelName}`);
+  console.log(`   Model: ${config.modelName}${config.modelApiBase ? ` (${config.modelApiBase})` : " (Gemini)"}`);
+  console.log(`   OpenAI Key: ${config.openaiApiKey ? "✅ set" : "⬚ not set"}`);
   console.log(`   Allowed users: ${config.allowedUserIds.length} user(s)`);
   console.log(`   Max iterations: ${config.maxIterations}`);
 
