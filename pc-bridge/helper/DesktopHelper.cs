@@ -33,6 +33,10 @@ class DesktopHelper
     [DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+    // DPI awareness — CRITICAL for correct screenshot dimensions
+    [DllImport("user32.dll")]
+    static extern bool SetProcessDPIAware();
+
     const uint KEYEVENTF_KEYUP = 0x0002;
     const int MOUSEEVENTF_LEFTDOWN = 0x0002;
     const int MOUSEEVENTF_LEFTUP = 0x0004;
@@ -41,6 +45,9 @@ class DesktopHelper
 
     static int Main(string[] args)
     {
+        // Must be called before ANY screen operations
+        SetProcessDPIAware();
+
         if (args.Length == 0)
         {
             Console.Error.WriteLine("Usage: DesktopHelper <command> [args]");
@@ -51,7 +58,7 @@ class DesktopHelper
         {
             switch (args[0].ToLower())
             {
-                case "screenshot": return TakeScreenshot();
+                case "screenshot": return TakeScreenshot(args);
                 case "hotkey": return SendHotkey(args);
                 case "click": return ClickAt(args);
                 case "focus": return FocusWindow(args);
@@ -69,14 +76,49 @@ class DesktopHelper
     }
 
     // ── Screenshot ─────────────────────────────────────────────
-    static int TakeScreenshot()
+    // Usage: screenshot [all|primary|N]
+    //   all     — capture all monitors as one wide image (default)
+    //   primary — capture primary monitor only
+    //   0,1,2.. — capture specific monitor by index
+    static int TakeScreenshot(string[] args)
     {
-        var screen = Screen.PrimaryScreen.Bounds;
-        using (var bitmap = new Bitmap(screen.Width, screen.Height))
+        string mode = args.Length > 1 ? args[1].ToLower() : "all";
+
+        Rectangle bounds;
+        Point sourcePoint;
+
+        if (mode == "primary")
+        {
+            bounds = Screen.PrimaryScreen.Bounds;
+            sourcePoint = bounds.Location;
+        }
+        else
+        {
+            int monitorIndex;
+            if (int.TryParse(mode, out monitorIndex))
+            {
+                var screens = Screen.AllScreens;
+                if (monitorIndex < 0 || monitorIndex >= screens.Length)
+                {
+                    Console.Error.WriteLine("Monitor index " + monitorIndex + " out of range (0-" + (screens.Length - 1) + ")");
+                    return 1;
+                }
+                bounds = screens[monitorIndex].Bounds;
+                sourcePoint = bounds.Location;
+            }
+            else
+            {
+                // "all" — capture entire virtual screen (all monitors)
+                bounds = SystemInformation.VirtualScreen;
+                sourcePoint = bounds.Location;
+            }
+        }
+
+        using (var bitmap = new Bitmap(bounds.Width, bounds.Height))
         using (var graphics = Graphics.FromImage(bitmap))
         using (var ms = new MemoryStream())
         {
-            graphics.CopyFromScreen(screen.Location, Point.Empty, screen.Size);
+            graphics.CopyFromScreen(sourcePoint, Point.Empty, bounds.Size);
 
             // JPEG quality 70 for small file size
             var jpegCodec = GetJpegEncoder();
@@ -89,11 +131,9 @@ class DesktopHelper
             }
             else
             {
-                // Fallback to PNG
                 bitmap.Save(ms, ImageFormat.Png);
             }
 
-            // Output base64 to stdout
             Console.Write(Convert.ToBase64String(ms.ToArray()));
         }
         return 0;
