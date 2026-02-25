@@ -1,6 +1,91 @@
 # Changelog
 
-All notable changes to Gravity Claw are documented here.
+All notable changes to CENTO (formerly Gravity Claw) are documented here.
+
+## [0.5.0] — 2026-02-25
+
+### 🧠 CENTO Mega-Prompt System (Soul)
+
+**New: Comprehensive AI personality and behavior system**
+
+- `src/prompts/soul.ts` — CENTO's identity, capabilities, decision framework
+- **Turkish-first personality** with technical English terms preserved
+- **3-Tier Security Framework:**
+  - Level 0 (Auto): screenshots, reading, web scraping
+  - Level 1 (Single approval): clicks, typing, calendar events
+  - Level 2 (Double approval): emails, installs, credentials
+- **Model Routing Logic:** Gemini (speed) → GPT-5.2 (accuracy) → Claude (code quality)
+- **Scenario Prompts:** morning briefing, code review, research, health check
+- **Response Templates:** short answers, research results, task reports, error handling
+- Agent.ts refactored: inline system prompt replaced with `buildCentoSystemPrompt()`
+- Scheduler: morning briefing at 08:00 using `SCENARIO_PROMPTS.morningBriefing`
+
+---
+
+## [0.4.0] — 2026-02-25
+
+### 🚀 Antigravity IDE Automation + Scrapling Web Scraping
+
+**New: Claude Opus/Sonnet delegation + Anti-bot web scraping**
+
+#### Antigravity IDE Automation (2 tools)
+- `antigravity_prompt` — Send complex coding tasks to Claude via Antigravity IDE
+- `antigravity_state` — Check IDE connection status
+- PC Bridge: `antigravity.ts` — CDP automation (connect → send prompt → poll response)
+- Supports **any Claude model** available in user's Antigravity subscription
+- **Free** — no API costs, uses existing subscription
+
+#### Web Scraping with Scrapling (2 tools)
+- `web_scrape` — Read any web page, including anti-bot protected sites
+- `web_extract` — Extract structured data (lists, tables, links) via CSS selectors
+- PC Bridge: `scraper.ts` — Python Scrapling library wrapper + Playwright fallback
+- Handles **Cloudflare, Akamai, PerimeterX** and other anti-bot protections
+- Prerequisite: `pip install scrapling` on local PC
+
+#### Telegram Image Sending
+- `send_image` — Send photos via Telegram (URL, file path, or base64)
+- Supports captions and all Telegram photo formats
+
+#### Notion Full Permissions
+- `create-a-database` — Create Notion databases programmatically
+- `update-a-database` — Modify database properties
+- `retrieve-a-database` — Get database schema and info
+- `delete-a-block` / `update-a-block` — Full block-level CRUD
+
+#### New Files
+- `pc-bridge/antigravity.ts` — Antigravity IDE CDP automation
+- `pc-bridge/scraper.ts` — Scrapling + Playwright web scraping
+- `src/tools/antigravity-control.ts` — Bot-side Antigravity tools (2)
+- `src/tools/scraper-control.ts` — Bot-side scraping tools (2)
+- `src/tools/send-image.ts` — Telegram image sending tool
+- `src/prompts/soul.ts` — CENTO mega-prompt system
+
+---
+
+## [0.3.5] — 2026-02-25
+
+### 🌐 CENTO Orchestrator + Tailscale VPN
+
+**New: Multi-model AI orchestration engine**
+
+#### CENTO Orchestrator (`orchestrator.ts`)
+- **GPT-5.2** Cascading Protocol — task decomposition, execution, validation
+- **5 Agent Roles:** orchestrator (GPT-5.2), coder (Claude), reviewer (Gemini Pro), researcher (Gemini Flash), scraper (Scrapling)
+- **Validation Gate** — automated quality validation of sub-task outputs
+- **Ralph Loop** — 10-minute health monitor detecting stuck tasks with retry/escalation
+- Task queue with priority levels (critical, high, normal, low)
+
+#### Tailscale VPN (replaces SSH tunnels)
+- Peer-to-peer encrypted connection: `berkan ↔ gravity-vps`
+- `PC_BRIDGE_URL` changed to `ws://berkan:3847/ws`
+- Zero-config networking — no port forwarding, no SSH tunnel scripts
+- 74ms direct latency (Tailscale MagicDNS)
+
+#### Architecture Change
+- **Before:** VPS → SSH Reverse Tunnel → PC Bridge
+- **After:** VPS → Tailscale VPN → PC Bridge (peer-to-peer)
+
+---
 
 ## [0.3.0] — 2026-02-24
 
@@ -32,7 +117,6 @@ Agent Claw can now control your Chrome browser and Windows desktop through a loc
 - Desktop actions via PowerShell commands
 - Token-based authentication
 - Auto-start via Windows Startup folder
-- SSH reverse tunnel for VPS connectivity
 
 #### Security Model
 - **Safe (auto):** Screenshots and read operations — no approval needed
@@ -40,14 +124,6 @@ Agent Claw can now control your Chrome browser and Windows desktop through a loc
 - **Site memory:** Once a domain is approved, it's remembered permanently
 - **Double approval:** Program installation — requires two-step confirmation
 - **Audit logging:** All browser/desktop actions logged to audit files
-
-#### New Files
-- `pc-bridge/server.ts` — WebSocket command server
-- `pc-bridge/browser.ts` — Playwright browser automation
-- `pc-bridge/desktop.ts` — PowerShell desktop control
-- `src/tools/browser-control.ts` — Bot-side browser tools (6)
-- `src/tools/desktop-control.ts` — Bot-side desktop tools (6)
-- `src/tools/site-memory.ts` — Approved site persistence
 
 ---
 
@@ -58,16 +134,6 @@ Agent Claw can now control your Chrome browser and Windows desktop through a loc
 - **Dynamic MCP sections** — System prompt only includes capabilities for tools actually connected
 - **MCP-aware scheduler** — Proactive checks and daily summaries skip when tools unavailable
 - **New `hasToolMatching()` method** — Agent can check tool availability at runtime
-
----
-
-### 🔧 Code Quality Improvements
-
-- Refactored `media-handler.ts` — Extracted `isSupportedMime()`, `isTextMime()`, `sendSplitReply()` helpers to reduce cognitive complexity
-- Modernized imports — `node:fs` and `node:path` prefix usage
-- Array access — `.at(-1)` instead of `[length - 1]`
-- Cleaned markdown formatting in `soul.md`
-- Added `ws` and `@types/ws` dependencies
 
 ---
 

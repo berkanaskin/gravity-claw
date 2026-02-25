@@ -21,27 +21,11 @@ export interface ToolDefinition {
   execute: (input: Record<string, unknown>) => Promise<string>;
 }
 
+import { buildCentoSystemPrompt } from "./prompts/soul.js";
+
 // ── System Prompt ────────────────────────────────────────────
 
-const SYSTEM_PROMPT_BASE = `You are Agent Claw — a smart, friendly personal AI assistant running as a Telegram bot (Gravity Claw projesi).
-
-Personality:
-- Helpful, concise, and friendly
-- You speak naturally, like a smart colleague
-- You respond in the same language as the user (usually Turkish)
-
-Memory:
-- When the user shares important personal info, preferences, or asks you to remember something, use the "remember" tool.
-- Use the "recall" tool to search your memory when relevant context might help.
-- Always check your memory when the user asks about something you previously discussed.
-- Core memory contains stable user preferences — always consider it.
-
-CRITICAL RULE — NEVER FABRICATE TOOL RESULTS:
-- You MUST ONLY report information that comes from an actual tool call response.
-- If you don't have a tool for something (e.g., no calendar tool available), say "Bu özellik şu an bağlı değil" — NEVER invent fake data.
-- NEVER pretend to have checked a calendar, email, or any service if the tool call didn't actually happen.
-- If a scheduled/proactive prompt asks you to check something but you lack the tool, respond with "YOK" or clearly state the tool is unavailable.
-`;
+const SYSTEM_PROMPT_BASE = buildCentoSystemPrompt();
 
 // MCP tool sections — only included when tools are actually connected
 const MCP_CALENDAR_SECTION = `
@@ -67,11 +51,12 @@ Google Drive:
 - No write access`;
 
 const MCP_NOTION_SECTION = `
-Notion:
+Notion (Tam Yetki):
 - READ: search pages, read page content, query databases
-- WRITE: create new pages, update page content, add entries to EXISTING databases
-- ⚠️ CANNOT: create new databases, create/modify database schemas (columns, properties, templates)
-- If user wants a new database, guide them to create it manually in Notion, then you can add entries to it.`;
+- WRITE: create/update pages, add/modify blocks, add entries to databases
+- DATABASE: create new databases, update database schemas (properties, columns)
+- Use API-create-a-database to create new databases when the user asks.
+- Use API-update-a-database to modify database properties/columns.`;
 
 const PC_CONTROL_SECTION = `
 PC Control Rules (CRITICAL):
@@ -95,6 +80,15 @@ Browser Control (PC Bridge):
 - After navigation, take a screenshot and describe what you see.
 - Login/password fields → DOUBLE confirmation required.`;
 
+const ANTIGRAVITY_SECTION = `
+Antigravity IDE (Claude Delegation):
+- You can send complex coding tasks to Antigravity IDE which runs Claude Opus/Sonnet.
+- Use antigravity_prompt for: code generation, refactoring, debugging, code reviews.
+- This is FREE — it uses the user's Antigravity subscription.
+- ⚠️ Requires: Antigravity IDE running on user's PC + PC Bridge connected.
+- Use antigravity_state to check if IDE is available before sending prompts.
+- For simple tasks, handle them yourself. Delegate only complex/large tasks.`;
+
 const DESKTOP_CONTROL_SECTION = `
 Desktop Control (PC Bridge):
 - You can control the user's entire desktop via desktop_ tools.
@@ -102,7 +96,16 @@ Desktop Control (PC Bridge):
 - desktop_click, desktop_type, desktop_hotkey, desktop_app_focus: ALWAYS need approval.
 - desktop_install: DOUBLE confirmation required ("Emin misin?" → second confirmation).
 - Workflow: Take screenshot first → analyze with vision → suggest action → get approval → execute.
-- Always describe what you see on screen before acting.`;
+- Always describe what you see on screen before acting.
+- Install programs → DOUBLE approval required.`;
+
+const WEB_SCRAPING_SECTION = `
+Web Scraping (Scrapling + Playwright):
+- web_scrape: Read any web page content, even anti-bot protected.
+- web_extract: Extract structured data (lists, tables, links) using CSS selectors.
+- Scrapling handles Cloudflare, Akamai, etc. Playwright is the fallback.
+- No approval needed — read-only operations.
+- Use for: research, product info, article reading, data collection.`;
 
 const GENERAL_SECTION = `
 General:
@@ -196,7 +199,9 @@ export class Agent {
     }
     if ([...toolNames].some(n => n.startsWith("pc_"))) systemPrompt += "\n" + PC_CONTROL_SECTION;
     if ([...toolNames].some(n => n.startsWith("browser_"))) systemPrompt += "\n" + BROWSER_CONTROL_SECTION;
+    if ([...toolNames].some(n => n.startsWith("antigravity_"))) systemPrompt += "\n" + ANTIGRAVITY_SECTION;
     if ([...toolNames].some(n => n.startsWith("desktop_"))) systemPrompt += "\n" + DESKTOP_CONTROL_SECTION;
+    if ([...toolNames].some(n => n.startsWith("web_scrape") || n.startsWith("web_extract"))) systemPrompt += "\n" + WEB_SCRAPING_SECTION;
     systemPrompt += "\n" + GENERAL_SECTION;
 
     if (this.memory) {

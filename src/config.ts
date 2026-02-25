@@ -25,6 +25,10 @@ export interface Config {
   enablePcBridge: boolean;
   pcBridgeUrl: string;
   pcBridgeToken: string;
+  // CENTO Orchestrator
+  orchestratorEnabled: boolean;
+  orchestratorModel: string;
+  openaiApiKey: string | null;
   // Heartbeat
   heartbeatEnabled: boolean;
   heartbeatCron: string;
@@ -75,8 +79,12 @@ export function loadConfig(): Config {
     notionApiKey: process.env["NOTION_API_KEY"] || null,
     // PC Bridge
     enablePcBridge: process.env["ENABLE_PC_BRIDGE"] === "true",
-    pcBridgeUrl: process.env["PC_BRIDGE_URL"] || "ws://localhost:3847/ws",
+    pcBridgeUrl: process.env["PC_BRIDGE_URL"] || "ws://berkan:3847/ws",
     pcBridgeToken: process.env["PC_BRIDGE_TOKEN"] || "gravity-claw-bridge-2026",
+    // CENTO Orchestrator
+    orchestratorEnabled: process.env["ORCHESTRATOR_ENABLED"] === "true",
+    orchestratorModel: process.env["ORCHESTRATOR_MODEL"] || "gpt-5.2",
+    openaiApiKey: process.env["OPENAI_API_KEY"] || null,
     // Heartbeat
     heartbeatEnabled: process.env["HEARTBEAT_ENABLED"] !== "false",
     heartbeatCron: process.env["HEARTBEAT_CRON"] || "0 8 * * *",
@@ -128,6 +136,13 @@ export function loadConfig(): Config {
     console.log(`   PC Bridge: ✅ enabled (${config.pcBridgeUrl})`);
   } else {
     console.log("   PC Bridge: ⬚ disabled (set ENABLE_PC_BRIDGE=true)");
+  }
+
+  // CENTO Orchestrator
+  if (config.orchestratorEnabled) {
+    console.log(`   CENTO: ✅ enabled (${config.orchestratorModel})`);
+  } else {
+    console.log("   CENTO: ⬚ disabled (set ORCHESTRATOR_ENABLED=true)");
   }
 
   // Heartbeat

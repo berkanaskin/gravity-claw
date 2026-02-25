@@ -1,0 +1,21 @@
+@echo off
+:: ── SSH Reverse Tunnel — PC Bridge to VPS ───────────
+:: Keeps a persistent SSH tunnel from PC to VPS.
+:: PC Bridge (localhost:3847) becomes accessible on VPS at localhost:3847.
+:: Uses native Windows OpenSSH (not gcloud plink which breaks -R).
+:: Auto-reconnects if connection drops.
+
+set SSH_EXE=C:\Windows\System32\OpenSSH\ssh.exe
+set SSH_KEY=%USERPROFILE%\.ssh\google_compute_engine
+set VPS_USER=berka
+set VPS_IP=34.79.44.124
+set LOCAL_PORT=3847
+
+:loop
+echo [%date% %time%] Connecting SSH tunnel to VPS (%VPS_IP%)... >> "%~dp0tunnel.log"
+
+"%SSH_EXE%" -i "%SSH_KEY%" -R %LOCAL_PORT%:localhost:%LOCAL_PORT% -N -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes %VPS_USER%@%VPS_IP%
+
+echo [%date% %time%] SSH tunnel disconnected. Reconnecting in 5s... >> "%~dp0tunnel.log"
+timeout /t 5 /nobreak >NUL
+goto loop

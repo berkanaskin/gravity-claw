@@ -25,7 +25,7 @@ const ALLOWED_TOOLS: Record<string, string[] | "*"> = {
     "drive.search",
   ],
 
-  // Notion (7 tools — trimmed for speed)
+  // Notion (full access — database creation included)
   notion: [
     "API-post-search",
     "API-retrieve-a-page",
@@ -34,6 +34,11 @@ const ALLOWED_TOOLS: Record<string, string[] | "*"> = {
     "API-patch-page",
     "API-append-block-children",
     "API-query-data-source",
+    "API-create-a-database",
+    "API-update-a-database",
+    "API-retrieve-a-database",
+    "API-delete-a-block",
+    "API-update-a-block",
   ],
 };
 

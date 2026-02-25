@@ -18,7 +18,7 @@ export async function createBot(
 
   // Initialize memory system
   const memory = new MemorySystem(config);
-  const localTools: ToolDefinition[] = createAllTools(memory, config);
+  const localTools: ToolDefinition[] = createAllTools(memory, config, bot);
 
   // Initialize MCP — connect to external servers
   const mcp = new McpManager();

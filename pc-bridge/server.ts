@@ -8,6 +8,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import http from "node:http";
 import * as browser from "./browser.js";
 import * as desktop from "./desktop.js";
+import * as antigravity from "./antigravity.js";
+import * as scraper from "./scraper.js";
 
 const PORT = parseInt(process.env["BRIDGE_PORT"] || "3847", 10);
 const AUTH_TOKEN = process.env["BRIDGE_AUTH_TOKEN"] || "gravity-claw-bridge-2026";
@@ -128,6 +130,45 @@ wss.on("connection", (ws, req) => {
 
         case "desktop_install":
           result = await desktop.desktopInstall(params.packageId as string);
+          break;
+
+        // ── Antigravity IDE Actions ──────────────
+        case "antigravity_connect":
+          result = await antigravity.connect();
+          break;
+
+        case "antigravity_prompt":
+          result = await antigravity.sendPrompt(
+            params.prompt as string,
+            (params.timeout as number) || 120000
+          );
+          break;
+
+        case "antigravity_screenshot":
+          result = { image: await antigravity.screenshot() };
+          break;
+
+        case "antigravity_state":
+          result = await antigravity.getState();
+          break;
+
+        // ── Web Scraping Actions ─────────────────
+        case "web_scrape":
+          result = await scraper.scrape(
+            params.url as string,
+            {
+              selector: params.selector as string | undefined,
+              useScrapling: params.useScrapling as boolean | undefined,
+              timeout: params.timeout as number | undefined,
+            }
+          );
+          break;
+
+        case "web_extract":
+          result = await scraper.extractData(
+            params.url as string,
+            params.pattern as string
+          );
           break;
 
         // ── Ping ─────────────────────────────────

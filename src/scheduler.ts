@@ -2,11 +2,14 @@ import cron from "node-cron";
 import type { Bot } from "grammy";
 import type { Config } from "./config.js";
 import type { Agent } from "./agent.js";
+import type { CentoOrchestrator } from "./orchestrator.js";
+import { SCENARIO_PROMPTS } from "./prompts/soul.js";
 
 // ── Proactive Notifications ──────────────────────────────────
 // Checks calendar every hour and sends reminders for upcoming events.
 
 const PROACTIVE_CRON = "0 * * * *"; // Every hour, on the hour
+const MORNING_BRIEFING_CRON = "0 8 * * *"; // Every day at 08:00
 
 async function sendProactiveCheck(
   bot: Bot,
@@ -110,8 +113,42 @@ export async function triggerDailySummary(
   await sendDailySummary(bot, config, agent);
 }
 
+// ── Morning Briefing (08:00) ─────────────────────────────────
+// Uses soul.ts scenario prompt for a comprehensive morning summary.
+
+async function sendMorningBriefing(
+  bot: Bot,
+  config: Config,
+  agent: Agent
+): Promise<void> {
+  for (const userId of config.allowedUserIds) {
+    try {
+      const response = await agent.processMessage(SCENARIO_PROMPTS.morningBriefing);
+
+      if (response && response.length > 5) {
+        const header = `☀️ *Günaydın!*\n\n`;
+        await bot.api.sendMessage(userId, header + response, {
+          parse_mode: "Markdown",
+        });
+        console.log(`☀️ Morning briefing sent to user ${userId}`);
+      }
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`❌ Morning briefing failed for user ${userId}: ${errMsg}`);
+    }
+  }
+}
+
+// ── CENTO Ralph Loop ─────────────────────────────────────────
+const RALPH_LOOP_CRON = "*/10 * * * *"; // Every 10 minutes
+
 // ── Start All Scheduled Jobs ─────────────────────────────────
-export function startScheduler(bot: Bot, config: Config, agent: Agent): void {
+export function startScheduler(
+  bot: Bot,
+  config: Config,
+  agent: Agent,
+  orchestrator?: CentoOrchestrator
+): void {
   // Proactive calendar reminders (every hour)
   cron.schedule(PROACTIVE_CRON, () => {
     console.log(`🔔 Proactive check at ${new Date().toLocaleTimeString()}`);
@@ -129,4 +166,24 @@ export function startScheduler(bot: Bot, config: Config, agent: Agent): void {
     );
   });
   console.log(`   Daily summary: ✅ enabled (21:00)`);
+
+  // CENTO Ralph Loop (every 10 minutes)
+  if (orchestrator && config.orchestratorEnabled) {
+    cron.schedule(RALPH_LOOP_CRON, () => {
+      console.log(`🔄 CENTO Ralph Loop at ${new Date().toLocaleTimeString()}`);
+      orchestrator.ralphLoop().catch((err) =>
+        console.error("❌ Ralph Loop cron error:", err)
+      );
+    });
+    console.log(`   CENTO Ralph Loop: ✅ enabled (every 10 min)`);
+  }
+
+  // CENTO Morning Briefing (08:00)
+  cron.schedule(MORNING_BRIEFING_CRON, () => {
+    console.log(`☀️ Morning briefing at ${new Date().toLocaleTimeString()}`);
+    sendMorningBriefing(bot, config, agent).catch((err) =>
+      console.error("❌ Morning briefing cron error:", err)
+    );
+  });
+  console.log(`   Morning briefing: ✅ enabled (08:00)`);
 }
