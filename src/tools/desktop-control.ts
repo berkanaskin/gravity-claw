@@ -3,7 +3,10 @@
 // Shares the WS bridge connection with browser-control.
 
 import WebSocket from "ws";
+import type { Bot } from "grammy";
+import { InputFile } from "grammy";
 import type { ToolDefinition } from "../agent.js";
+import type { Config } from "../config.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -110,28 +113,55 @@ function bridgeError(errMsg: string): string {
   return JSON.stringify({ error: errMsg });
 }
 
-export function createDesktopTools(): ToolDefinition[] {
+export function createDesktopTools(bot?: Bot, config?: Config): ToolDefinition[] {
   return [
-    // 1. Desktop Screenshot (safe)
+    // 1. Desktop Screenshot — sends DIRECTLY to Telegram (bypasses Gemini context)
     {
       name: "desktop_screenshot",
       description:
-        "Take a screenshot of the entire desktop (all screens). " +
+        "Take a screenshot of the user's desktop and send it directly to Telegram. " +
+        "This tool captures AND sends — you do NOT need to call send_image afterward. " +
         "Safe read-only operation — no approval needed. " +
         "⚠️ Requires PC Bridge to be running on the user's computer.",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          caption: {
+            type: "string",
+            description: "Caption for the screenshot (e.g., 'Masaüstü ekran görüntüsü')",
+          },
+        },
       },
-      execute: async () => {
+      execute: async (args) => {
         try {
           const result = await bridgeCommand("desktop_screenshot") as { image: string };
-          auditLog("DESKTOP_SCREENSHOT", "captured", "AUTO");
-          return JSON.stringify({
-            success: true,
-            image: result.image,
-            note: "Desktop screenshot captured (base64 PNG)",
-          });
+          auditLog("DESKTOP_SCREENSHOT", `captured (${result.image.length} chars)`, "AUTO");
+
+          // Send DIRECTLY to Telegram — do NOT pass through Gemini context
+          if (bot && config) {
+            const buffer = Buffer.from(result.image, "base64");
+            const caption = String(args?.caption || "🖥️ Desktop screenshot");
+
+            for (const userId of config.allowedUserIds) {
+              await bot.api.sendPhoto(userId, new InputFile(buffer, "screenshot.jpg"), {
+                caption,
+                parse_mode: "Markdown",
+              });
+            }
+
+            return JSON.stringify({
+              success: true,
+              message: "Screenshot alındı ve Telegram'a gönderildi.",
+              dimensions: `${buffer.length} bytes JPEG`,
+            });
+          } else {
+            // Fallback: return base64 if bot not available (shouldn't happen)
+            return JSON.stringify({
+              success: true,
+              image: result.image,
+              note: "Screenshot captured but bot not available for direct send",
+            });
+          }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
           auditLog("DESKTOP_SCREENSHOT", errMsg, "ERROR");

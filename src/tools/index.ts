@@ -28,7 +28,7 @@ export function createAllTools(memory: MemorySystem, config: Config, bot?: Bot):
   if (config.enablePcBridge) {
     tools.push(
       ...createBrowserTools(),
-      ...createDesktopTools(),
+      ...createDesktopTools(bot, config),
       ...createAntigravityTools(),
       ...createScraperTools()
     );
