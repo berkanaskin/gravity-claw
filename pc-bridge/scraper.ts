@@ -56,8 +56,6 @@ async function scraplingFetch(url: string, options: {
   method: string;
 }> {
   const outputFile = path.join(TEMP_DIR, `scrape_${Date.now()}.json`);
-  const selectorArg = options.selector ? `--selector "${options.selector}"` : "";
-  const timeoutArg = options.timeout ? `--timeout ${options.timeout}` : "";
 
   // Python script that uses Scrapling
   const pythonScript = `
@@ -87,7 +85,7 @@ if selector:
 else:
     result["text"] = page.get_all_text()[:8000]
 
-with open("${outputFile.replace(/\\/g, "\\\\")}", "w", encoding="utf-8") as f:
+with open("${outputFile.replaceAll("\\", "\\\\")}", "w", encoding="utf-8") as f:
     json.dump(result, f, ensure_ascii=False)
 
 print("OK")
@@ -129,8 +127,7 @@ async function playwrightFetch(url: string, options: {
 
   let text: string;
   if (options.selector) {
-    const page = await browser.navigate(url);
-    // Re-read with selector
+    // Navigate already done above; re-read with selector context
     const pageContent = await browser.readPage();
     text = pageContent.text;
   } else {

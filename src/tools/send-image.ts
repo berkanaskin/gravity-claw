@@ -39,8 +39,8 @@ export function createSendImageTool(bot: Bot, config: Config): ToolDefinition {
       required: ["source", "caption"],
     },
     execute: async (input: Record<string, unknown>): Promise<string> => {
-      const source = String(input.source || "");
-      const caption = String(input.caption || "");
+      const source = typeof input.source === "string" ? input.source : "";
+      const caption = typeof input.caption === "string" ? input.caption : "";
 
       if (!source) {
         return JSON.stringify({ error: "Image source is required" });
@@ -58,7 +58,7 @@ export function createSendImageTool(bot: Bot, config: Config): ToolDefinition {
             // Base64 with data URI prefix
             const base64Data = source.replace(/^data:image\/\w+;base64,/, "");
             const buffer = Buffer.from(base64Data, "base64");
-            const formatMatch = source.match(/^data:image\/(\w+);/);
+            const formatMatch = /^data:image\/(\w+);/.exec(source);
             const ext = formatMatch ? formatMatch[1].replace("jpeg", "jpg") : "jpg";
             await bot.api.sendPhoto(userId, new InputFile(buffer, `image.${ext}`), {
               caption,

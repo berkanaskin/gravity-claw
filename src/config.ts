@@ -55,8 +55,8 @@ export function loadConfig(): Config {
     allowedUserIds: requireEnv("TELEGRAM_ALLOWLIST_USER_ID")
       .split(",")
       .map((id) => {
-        const parsed = parseInt(id.trim(), 10);
-        if (isNaN(parsed)) {
+        const parsed = Number.parseInt(id.trim(), 10);
+        if (Number.isNaN(parsed)) {
           console.error(`❌ Invalid user ID in TELEGRAM_ALLOWLIST_USER_ID: "${id}"`);
           process.exit(1);
         }
@@ -64,7 +64,7 @@ export function loadConfig(): Config {
       }),
     modelName: process.env["MODEL_NAME"] || "gemini-2.5-pro",
     fallbackModel: process.env["FALLBACK_MODEL"] || "gemini-2.5-flash",
-    maxIterations: parseInt(process.env["MAX_ITERATIONS"] || "10", 10),
+    maxIterations: Number.parseInt(process.env["MAX_ITERATIONS"] || "10", 10),
     // Voice input
     transcriptionApiKey: process.env["TRANSCRIPTION_API_KEY"] || null,
     mockTranscription: process.env["MOCK_TRANSCRIPTION"] === "true",
@@ -100,7 +100,8 @@ export function loadConfig(): Config {
 
   // NEVER log secrets — only confirm features
   console.log("✅ Config loaded:");
-  console.log(`   Model: ${config.modelName}${config.modelApiBase ? ` (${config.modelApiBase})` : " (Gemini)"}`);
+  const modelBase = config.modelApiBase ? ` (${config.modelApiBase})` : " (Gemini)";
+  console.log(`   Model: ${config.modelName}${modelBase}`);
   console.log(`   OpenAI Key: ${config.openaiApiKey ? "✅ set" : "⬚ not set"}`);
   console.log(`   Allowed users: ${config.allowedUserIds.length} user(s)`);
   console.log(`   Max iterations: ${config.maxIterations}`);

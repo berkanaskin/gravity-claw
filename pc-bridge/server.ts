@@ -4,14 +4,14 @@
 
 import "dotenv/config";
 import express from "express";
-import { WebSocketServer, WebSocket } from "ws";
+import { WebSocketServer } from "ws";
 import http from "node:http";
 import * as browser from "./browser.js";
 import * as desktop from "./desktop.js";
 import * as antigravity from "./antigravity.js";
 import * as scraper from "./scraper.js";
 
-const PORT = parseInt(process.env["BRIDGE_PORT"] || "3847", 10);
+const PORT = Number.parseInt(process.env["BRIDGE_PORT"] || "3847", 10);
 const AUTH_TOKEN = process.env["BRIDGE_AUTH_TOKEN"] || "gravity-claw-bridge-2026";
 
 // ── Express health check ────────────────────────────────────
@@ -42,7 +42,7 @@ wss.on("connection", (ws, req) => {
     let msg: { id: string; action: string; params: Record<string, unknown> };
 
     try {
-      msg = JSON.parse(data.toString());
+      msg = JSON.parse(String(data));
     } catch {
       ws.send(JSON.stringify({ error: "Invalid JSON" }));
       return;
