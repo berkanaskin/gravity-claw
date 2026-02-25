@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Diagnostics;
 using System.IO;
@@ -7,20 +8,52 @@ using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 /// <summary>
-/// Gravity Claw PC Bridge — Native Desktop Helper
+/// Gravity Claw PC Bridge — Native Desktop Helper v3
+/// Uses Win32 BitBlt for reliable screen capture (no DPI/GDI issues).
 /// Compiled once with csc.exe, called by Node.js bridge.
-/// Avoids PowerShell AMSI scanning entirely.
-/// 
-/// Usage:
-///   DesktopHelper.exe screenshot
-///   DesktopHelper.exe hotkey 0x11 0x5B 0x27    (ctrl+win+right)
-///   DesktopHelper.exe click 500 300 left
-///   DesktopHelper.exe focus "Notion"
-///   DesktopHelper.exe type "Hello World"
 /// </summary>
 class DesktopHelper
 {
-    // ── Win32 Imports ──────────────────────────────────────────
+    // ── Win32: Screen Capture ──────────────────────────────────
+    [DllImport("user32.dll")]
+    static extern IntPtr GetDesktopWindow();
+
+    [DllImport("user32.dll")]
+    static extern IntPtr GetWindowDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest, IntPtr hdcSrc, int xSrc, int ySrc, int rop);
+
+    [DllImport("gdi32.dll")]
+    static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    static extern IntPtr CreateCompatibleBitmap(IntPtr hDC, int nWidth, int nHeight);
+
+    [DllImport("gdi32.dll")]
+    static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    static extern bool DeleteDC(IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll")]
+    static extern int GetSystemMetrics(int nIndex);
+
+    const int SRCCOPY = 0x00CC0020;
+    const int SM_XVIRTUALSCREEN = 76;
+    const int SM_YVIRTUALSCREEN = 77;
+    const int SM_CXVIRTUALSCREEN = 78;
+    const int SM_CYVIRTUALSCREEN = 79;
+    const int SM_CXSCREEN = 0;
+    const int SM_CYSCREEN = 1;
+
+    // ── Win32: Keyboard & Mouse ────────────────────────────────
     [DllImport("user32.dll")]
     static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -33,8 +66,8 @@ class DesktopHelper
     [DllImport("user32.dll")]
     static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
-    // DPI awareness — CRITICAL for correct screenshot dimensions
-    [DllImport("user32.dll")]
+    // ── DPI Awareness ──────────────────────────────────────────
+    [DllImport("user32.dll", SetLastError = true)]
     static extern bool SetProcessDPIAware();
 
     const uint KEYEVENTF_KEYUP = 0x0002;
@@ -43,9 +76,11 @@ class DesktopHelper
     const int MOUSEEVENTF_RIGHTDOWN = 0x0008;
     const int MOUSEEVENTF_RIGHTUP = 0x0010;
 
+    // Max dimension for Telegram photo API
+    const int TELEGRAM_MAX_DIMENSION = 2560;
+
     static int Main(string[] args)
     {
-        // Must be called before ANY screen operations
         SetProcessDPIAware();
 
         if (args.Length == 0)
@@ -63,6 +98,7 @@ class DesktopHelper
                 case "click": return ClickAt(args);
                 case "focus": return FocusWindow(args);
                 case "type": return TypeText(args);
+                case "monitors": return ListMonitors();
                 default:
                     Console.Error.WriteLine("Unknown command: " + args[0]);
                     return 1;
@@ -75,67 +111,95 @@ class DesktopHelper
         }
     }
 
-    // ── Screenshot ─────────────────────────────────────────────
-    // Usage: screenshot [all|primary|N]
-    //   all     — capture all monitors as one wide image (default)
-    //   primary — capture primary monitor only
-    //   0,1,2.. — capture specific monitor by index
+    // ── Screenshot (Native BitBlt) ─────────────────────────────
+    // Usage: screenshot [all|primary]
     static int TakeScreenshot(string[] args)
     {
-        string mode = args.Length > 1 ? args[1].ToLower() : "all";
+        string mode = args.Length > 1 ? args[1].ToLower() : "primary";
 
-        Rectangle bounds;
-        Point sourcePoint;
+        int srcX, srcY, width, height;
 
-        if (mode == "primary")
+        if (mode == "all")
         {
-            bounds = Screen.PrimaryScreen.Bounds;
-            sourcePoint = bounds.Location;
+            srcX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+            srcY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+            width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+            height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
         }
         else
         {
-            int monitorIndex;
-            if (int.TryParse(mode, out monitorIndex))
-            {
-                var screens = Screen.AllScreens;
-                if (monitorIndex < 0 || monitorIndex >= screens.Length)
-                {
-                    Console.Error.WriteLine("Monitor index " + monitorIndex + " out of range (0-" + (screens.Length - 1) + ")");
-                    return 1;
-                }
-                bounds = screens[monitorIndex].Bounds;
-                sourcePoint = bounds.Location;
-            }
-            else
-            {
-                // "all" — capture entire virtual screen (all monitors)
-                bounds = SystemInformation.VirtualScreen;
-                sourcePoint = bounds.Location;
-            }
+            // "primary" or default
+            srcX = 0;
+            srcY = 0;
+            width = GetSystemMetrics(SM_CXSCREEN);
+            height = GetSystemMetrics(SM_CYSCREEN);
         }
 
-        using (var bitmap = new Bitmap(bounds.Width, bounds.Height))
-        using (var graphics = Graphics.FromImage(bitmap))
-        using (var ms = new MemoryStream())
+        // Native BitBlt capture — most reliable method
+        IntPtr desktopHwnd = GetDesktopWindow();
+        IntPtr desktopDC = GetWindowDC(desktopHwnd);
+        IntPtr memDC = CreateCompatibleDC(desktopDC);
+        IntPtr hBitmap = CreateCompatibleBitmap(desktopDC, width, height);
+        IntPtr oldBitmap = SelectObject(memDC, hBitmap);
+
+        BitBlt(memDC, 0, 0, width, height, desktopDC, srcX, srcY, SRCCOPY);
+
+        SelectObject(memDC, oldBitmap);
+
+        using (var captured = Image.FromHbitmap(hBitmap))
         {
-            graphics.CopyFromScreen(sourcePoint, Point.Empty, bounds.Size);
+            // Downscale for Telegram if needed
+            Bitmap finalBitmap;
+            bool needsDispose = false;
 
-            // JPEG quality 70 for small file size
-            var jpegCodec = GetJpegEncoder();
-            if (jpegCodec != null)
+            if (captured.Width > TELEGRAM_MAX_DIMENSION || captured.Height > TELEGRAM_MAX_DIMENSION)
             {
-                var encoderParams = new EncoderParameters(1);
-                encoderParams.Param[0] = new EncoderParameter(
-                    System.Drawing.Imaging.Encoder.Quality, 70L);
-                bitmap.Save(ms, jpegCodec, encoderParams);
+                float scale = Math.Min(
+                    (float)TELEGRAM_MAX_DIMENSION / captured.Width,
+                    (float)TELEGRAM_MAX_DIMENSION / captured.Height);
+                int newW = (int)(captured.Width * scale);
+                int newH = (int)(captured.Height * scale);
+
+                finalBitmap = new Bitmap(newW, newH);
+                needsDispose = true;
+                using (var g = Graphics.FromImage(finalBitmap))
+                {
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(captured, 0, 0, newW, newH);
+                }
             }
             else
             {
-                bitmap.Save(ms, ImageFormat.Png);
+                finalBitmap = new Bitmap(captured);
+                needsDispose = true;
             }
 
-            Console.Write(Convert.ToBase64String(ms.ToArray()));
+            using (var ms = new MemoryStream())
+            {
+                var jpegCodec = GetJpegEncoder();
+                if (jpegCodec != null)
+                {
+                    var encoderParams = new EncoderParameters(1);
+                    encoderParams.Param[0] = new EncoderParameter(
+                        System.Drawing.Imaging.Encoder.Quality, 70L);
+                    finalBitmap.Save(ms, jpegCodec, encoderParams);
+                }
+                else
+                {
+                    finalBitmap.Save(ms, ImageFormat.Jpeg);
+                }
+
+                Console.Write(Convert.ToBase64String(ms.ToArray()));
+            }
+
+            if (needsDispose) finalBitmap.Dispose();
         }
+
+        // Cleanup native resources
+        DeleteObject(hBitmap);
+        DeleteDC(memDC);
+        ReleaseDC(desktopHwnd, desktopDC);
+
         return 0;
     }
 
@@ -148,8 +212,22 @@ class DesktopHelper
         return null;
     }
 
+    // ── List Monitors ──────────────────────────────────────────
+    static int ListMonitors()
+    {
+        var screens = Screen.AllScreens;
+        for (int i = 0; i < screens.Length; i++)
+        {
+            var s = screens[i];
+            Console.WriteLine(i + ": " + s.Bounds.Width + "x" + s.Bounds.Height
+                + (s.Primary ? " (primary)" : "")
+                + " at " + s.Bounds.X + "," + s.Bounds.Y);
+        }
+        Console.Write("Virtual: " + GetSystemMetrics(SM_CXVIRTUALSCREEN) + "x" + GetSystemMetrics(SM_CYVIRTUALSCREEN));
+        return 0;
+    }
+
     // ── Hotkey ──────────────────────────────────────────────────
-    // Args: hotkey 0x11 0x5B 0x27 (hex VK codes)
     static int SendHotkey(string[] args)
     {
         if (args.Length < 2)
@@ -164,26 +242,19 @@ class DesktopHelper
             keys[i - 1] = (byte)Convert.ToInt32(args[i], 16);
         }
 
-        // Press all keys down
         foreach (var key in keys)
-        {
             keybd_event(key, 0, 0, UIntPtr.Zero);
-        }
 
         System.Threading.Thread.Sleep(50);
 
-        // Release all keys in reverse order
         for (int i = keys.Length - 1; i >= 0; i--)
-        {
             keybd_event(keys[i], 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-        }
 
         Console.Write("OK");
         return 0;
     }
 
     // ── Click ───────────────────────────────────────────────────
-    // Args: click <x> <y> [left|right]
     static int ClickAt(string[] args)
     {
         if (args.Length < 3)
@@ -215,7 +286,6 @@ class DesktopHelper
     }
 
     // ── Focus Window ────────────────────────────────────────────
-    // Args: focus "Window Title"
     static int FocusWindow(string[] args)
     {
         if (args.Length < 2)
@@ -247,14 +317,13 @@ class DesktopHelper
             return 0;
         }
 
-        ShowWindow(found.MainWindowHandle, 9); // SW_RESTORE
+        ShowWindow(found.MainWindowHandle, 9);
         SetForegroundWindow(found.MainWindowHandle);
         Console.Write(found.MainWindowTitle);
         return 0;
     }
 
     // ── Type Text ───────────────────────────────────────────────
-    // Args: type "text to type"
     static int TypeText(string[] args)
     {
         if (args.Length < 2)
@@ -263,7 +332,6 @@ class DesktopHelper
             return 1;
         }
 
-        // Escape special SendKeys characters
         string text = args[1]
             .Replace("{", "{{}")
             .Replace("}", "{}}")
