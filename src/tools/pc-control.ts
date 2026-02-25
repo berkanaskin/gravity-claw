@@ -202,10 +202,10 @@ export function createPcTools(): ToolDefinition[] {
       name: "pc_execute",
       description:
         "Execute a PowerShell command on the user's PC. " +
-        "IMPORTANT: You MUST show the command to the user and get explicit approval " +
-        'before calling this. Only call this AFTER the user says "onayla", "evet", or "gönder". ' +
-        "For dangerous operations (delete, rename), ask for double confirmation. " +
-        "NEVER use this for blocked commands (format, registry, shutdown).",
+        "Safe commands (Get-*, ls, dir, hostname, etc.) run automatically. " +
+        "Normal commands (copy, move, start) run automatically. " +
+        "ONLY ask for confirmation for DANGEROUS commands (delete, remove, format, registry). " +
+        "Blocked commands (shutdown, diskpart, format) are always rejected.",
       parameters: {
         type: "object",
         properties: {

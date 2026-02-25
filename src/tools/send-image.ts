@@ -55,10 +55,9 @@ export function createSendImageTool(bot: Bot, config: Config): ToolDefinition {
               parse_mode: "Markdown",
             });
           } else if (source.startsWith("data:image/")) {
-            // Base64 encoded image
+            // Base64 with data URI prefix
             const base64Data = source.replace(/^data:image\/\w+;base64,/, "");
             const buffer = Buffer.from(base64Data, "base64");
-            // Detect format from data URI, default to jpg (PC Bridge sends JPEG)
             const formatMatch = source.match(/^data:image\/(\w+);/);
             const ext = formatMatch ? formatMatch[1].replace("jpeg", "jpg") : "jpg";
             await bot.api.sendPhoto(userId, new InputFile(buffer, `image.${ext}`), {
@@ -71,8 +70,15 @@ export function createSendImageTool(bot: Bot, config: Config): ToolDefinition {
               caption,
               parse_mode: "Markdown",
             });
+          } else if (source.length > 200 && /^[A-Za-z0-9+/=\s]+$/.test(source.substring(0, 100))) {
+            // Raw base64 data (no data URI prefix) — from PC Bridge screenshots
+            const buffer = Buffer.from(source, "base64");
+            await bot.api.sendPhoto(userId, new InputFile(buffer, "screenshot.jpg"), {
+              caption,
+              parse_mode: "Markdown",
+            });
           } else {
-            return JSON.stringify({ error: `Image not found: ${source}` });
+            return JSON.stringify({ error: `Image not found: ${source.substring(0, 100)}` });
           }
         }
 
