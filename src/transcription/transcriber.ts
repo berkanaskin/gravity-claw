@@ -18,7 +18,10 @@ export class GeminiTranscriber implements Transcriber {
   constructor(config: Config) {
     const apiKey = config.transcriptionApiKey || config.modelApiKey;
     this.genAI = new GoogleGenerativeAI(apiKey);
-    this.modelName = config.modelName;
+    // Always use a Gemini model for transcription — independent of main model
+    // This allows GPT-5.2 as main brain while Gemini handles audio transcription
+    this.modelName = "gemini-2.0-flash";
+    console.log(`   🎤 Transcription model: ${this.modelName} (Gemini)`);
   }
 
   async transcribe(audioBuffer: Buffer, mimeType: string): Promise<string> {
