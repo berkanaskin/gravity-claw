@@ -1,12 +1,20 @@
 // ── Desktop Control Tools (Bot-side) ────────────────────────
 // These tools run on the VPS and send desktop commands to PC Bridge.
+// Shares the WS bridge connection with browser-control.
 
+import WebSocket from "ws";
 import type { ToolDefinition } from "../agent.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-// Reuse the bridge connection from browser-control
-// Import is dynamic to avoid circular deps — these share the same WS connection
+// ── Bridge Connection (shared pattern with browser-control) ──
+
+let ws: WebSocket | null = null;
+let pendingRequests = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+let requestId = 0;
+
+const BRIDGE_URL = process.env["PC_BRIDGE_URL"] || "ws://localhost:3847/ws";
+const BRIDGE_TOKEN = process.env["PC_BRIDGE_TOKEN"] || "gravity-claw-bridge-2026";
 
 const AUDIT_DIR = "memory";
 const AUDIT_FILE = path.join(AUDIT_DIR, "desktop_audit.log");
@@ -20,13 +28,86 @@ function auditLog(action: string, detail: string, status: string): void {
   } catch { /* never crash on logging */ }
 }
 
-// Bridge command sender — injected at registration time to share WS connection
-type BridgeCommandFn = (action: string, params?: Record<string, unknown>) => Promise<unknown>;
-let bridgeCommand: BridgeCommandFn;
+/** Connect to PC Bridge */
+async function ensureConnection(): Promise<WebSocket> {
+  if (ws && ws.readyState === WebSocket.OPEN) return ws;
 
-/** Set the bridge command function (called from tools/index.ts) */
-export function setBridgeCommand(fn: BridgeCommandFn): void {
-  bridgeCommand = fn;
+  return new Promise((resolve, reject) => {
+    const url = `${BRIDGE_URL}?token=${BRIDGE_TOKEN}`;
+    const socket = new WebSocket(url);
+
+    const timeout = setTimeout(() => {
+      socket.close();
+      reject(new Error(
+        "PC Bridge'e bağlanılamadı (10s timeout). " +
+        "Bilgisayarında PC Bridge çalışıyor mu? SSH tunnel açık mı?"
+      ));
+    }, 10000);
+
+    socket.on("open", () => {
+      clearTimeout(timeout);
+      ws = socket;
+      resolve(socket);
+    });
+
+    socket.on("message", (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        const pending = pendingRequests.get(msg.id);
+        if (pending) {
+          pendingRequests.delete(msg.id);
+          if (msg.success) {
+            pending.resolve(msg.result);
+          } else {
+            pending.reject(new Error(msg.error || "Unknown bridge error"));
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    });
+
+    socket.on("close", () => {
+      ws = null;
+    });
+
+    socket.on("error", (err: Error) => {
+      clearTimeout(timeout);
+      ws = null;
+      reject(new Error(`PC Bridge bağlantı hatası: ${err.message}`));
+    });
+  });
+}
+
+/** Send command to PC Bridge and await response */
+async function bridgeCommand(action: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  const socket = await ensureConnection();
+  const id = `desktop_${++requestId}`;
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(id);
+      reject(new Error(`Bridge command timeout: ${action}`));
+    }, 60000);
+
+    pendingRequests.set(id, {
+      resolve: (v) => { clearTimeout(timeout); resolve(v); },
+      reject: (e) => { clearTimeout(timeout); reject(e); },
+    });
+
+    socket.send(JSON.stringify({ id, action, params }));
+  });
+}
+
+/** User-friendly error message for bridge failures */
+function bridgeError(errMsg: string): string {
+  if (errMsg.includes("bağlanılamadı") || errMsg.includes("ECONNREFUSED") || errMsg.includes("timeout")) {
+    return JSON.stringify({
+      error: "PC Bridge'e ulaşılamıyor.",
+      details: errMsg,
+      hint: "Bilgisayarında PC Bridge çalışmıyor veya SSH tunnel bağlı değil. " +
+            "PC Bridge'i başlatmak için: (1) Chrome CDP aç, (2) start-bridge.bat çalıştır, (3) SSH tunnel başlat.",
+    });
+  }
+  return JSON.stringify({ error: errMsg });
 }
 
 export function createDesktopTools(): ToolDefinition[] {
@@ -36,7 +117,8 @@ export function createDesktopTools(): ToolDefinition[] {
       name: "desktop_screenshot",
       description:
         "Take a screenshot of the entire desktop (all screens). " +
-        "Safe read-only operation — no approval needed.",
+        "Safe read-only operation — no approval needed. " +
+        "⚠️ Requires PC Bridge to be running on the user's computer.",
       parameters: {
         type: "object",
         properties: {},
@@ -52,7 +134,8 @@ export function createDesktopTools(): ToolDefinition[] {
           });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          auditLog("DESKTOP_SCREENSHOT", errMsg, "ERROR");
+          return bridgeError(errMsg);
         }
       },
     },
@@ -86,7 +169,7 @@ export function createDesktopTools(): ToolDefinition[] {
           return JSON.stringify({ success: true, result });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          return bridgeError(errMsg);
         }
       },
     },
@@ -115,7 +198,7 @@ export function createDesktopTools(): ToolDefinition[] {
           return JSON.stringify({ success: true, result });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          return bridgeError(errMsg);
         }
       },
     },
@@ -144,7 +227,7 @@ export function createDesktopTools(): ToolDefinition[] {
           return JSON.stringify({ success: true, result });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          return bridgeError(errMsg);
         }
       },
     },
@@ -173,7 +256,7 @@ export function createDesktopTools(): ToolDefinition[] {
           return JSON.stringify({ success: true, result });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          return bridgeError(errMsg);
         }
       },
     },
@@ -211,7 +294,7 @@ export function createDesktopTools(): ToolDefinition[] {
           return JSON.stringify({ success: true, result });
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          return JSON.stringify({ error: errMsg });
+          return bridgeError(errMsg);
         }
       },
     },

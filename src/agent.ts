@@ -68,8 +68,10 @@ Google Drive:
 
 const MCP_NOTION_SECTION = `
 Notion:
-- READ: search and read pages/databases
-- WRITE: create pages, update content, add database entries`;
+- READ: search pages, read page content, query databases
+- WRITE: create new pages, update page content, add entries to EXISTING databases
+- ⚠️ CANNOT: create new databases, create/modify database schemas (columns, properties, templates)
+- If user wants a new database, guide them to create it manually in Notion, then you can add entries to it.`;
 
 const PC_CONTROL_SECTION = `
 PC Control Rules (CRITICAL):
