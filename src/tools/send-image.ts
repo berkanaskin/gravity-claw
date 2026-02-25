@@ -58,7 +58,10 @@ export function createSendImageTool(bot: Bot, config: Config): ToolDefinition {
             // Base64 encoded image
             const base64Data = source.replace(/^data:image\/\w+;base64,/, "");
             const buffer = Buffer.from(base64Data, "base64");
-            await bot.api.sendPhoto(userId, new InputFile(buffer, "image.png"), {
+            // Detect format from data URI, default to jpg (PC Bridge sends JPEG)
+            const formatMatch = source.match(/^data:image\/(\w+);/);
+            const ext = formatMatch ? formatMatch[1].replace("jpeg", "jpg") : "jpg";
+            await bot.api.sendPhoto(userId, new InputFile(buffer, `image.${ext}`), {
               caption,
               parse_mode: "Markdown",
             });
