@@ -1,39 +1,35 @@
 // ── PC Bridge: Desktop Control ───────────────────────────────
 // PowerShell-based desktop automation: screenshot, click, type, hotkeys.
-// All commands use temp .ps1 files to avoid quoting/escape issues.
+// Uses -EncodedCommand to avoid temp files (AV blocks .ps1) and escape issues.
 
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, unlink } from "node:fs/promises";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
 
 const execAsync = promisify(exec);
 
 /**
- * Run a PowerShell script by writing it to a temp file first.
- * This avoids all quoting, here-string, and escape issues.
+ * Run a PowerShell script using -EncodedCommand (Base64 UTF-16LE).
+ * This avoids:
+ * - Temp .ps1 files (blocked by antivirus)
+ * - Quoting/escape hell with inline -Command
+ * - Here-string parse errors
  */
 async function runPowerShell(
   script: string,
   options: { timeout?: number; maxBuffer?: number } = {}
 ): Promise<string> {
-  const tempFile = join(tmpdir(), `pcbridge_${Date.now()}_${Math.random().toString(36).slice(2)}.ps1`);
+  // PowerShell -EncodedCommand requires UTF-16LE Base64
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
 
-  try {
-    await writeFile(tempFile, script, "utf-8");
-    const { stdout } = await execAsync(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tempFile}"`,
-      {
-        timeout: options.timeout ?? 10000,
-        maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
-      }
-    );
-    return stdout.trim();
-  } finally {
-    // Clean up temp file
-    try { await unlink(tempFile); } catch { /* ignore */ }
-  }
+  const { stdout } = await execAsync(
+    `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`,
+    {
+      timeout: options.timeout ?? 10000,
+      maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
+    }
+  );
+
+  return stdout.trim();
 }
 
 /** Take full desktop screenshot — returns base64 JPEG (smaller than PNG) */
@@ -152,7 +148,7 @@ export async function desktopHotkey(hotkey: string): Promise<string> {
     vkCodes.push(vk);
   }
 
-  // Build PowerShell script: press all keys down, then release in reverse
+  // Build PowerShell: press all keys down, then release in reverse
   const pressLines = vkCodes.map(vk => `[Keyboard]::keybd_event(${vk}, 0, 0, [UIntPtr]::Zero)`);
   const releaseLines = [...vkCodes].reverse().map(vk => `[Keyboard]::keybd_event(${vk}, 0, 0x0002, [UIntPtr]::Zero)`);
 
@@ -189,20 +185,17 @@ public class WinFocus {
 }
 "@
 
-$$proc = Get-Process | Where-Object { $$_.MainWindowTitle -like "*${safeTitle}*" } | Select-Object -First 1
-if ($$proc) {
-  [WinFocus]::ShowWindow($$proc.MainWindowHandle, 9)
-  [WinFocus]::SetForegroundWindow($$proc.MainWindowHandle)
-  $$proc.MainWindowTitle
+$proc = Get-Process | Where-Object { $_.MainWindowTitle -like "*${safeTitle}*" } | Select-Object -First 1
+if ($proc) {
+  [WinFocus]::ShowWindow($proc.MainWindowHandle, 9)
+  [WinFocus]::SetForegroundWindow($proc.MainWindowHandle)
+  $proc.MainWindowTitle
 } else {
   "NOT_FOUND"
 }
 `;
 
-  // Fix: $$ is used in template literal to avoid JS interpolation, convert to single $
-  const fixedPs = ps.replace(/\$\$/g, "$");
-
-  const result = await runPowerShell(fixedPs, { timeout: 5000 });
+  const result = await runPowerShell(ps, { timeout: 5000 });
 
   if (result === "NOT_FOUND") {
     return `Window not found: "${title}"`;
